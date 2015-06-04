@@ -1,103 +1,107 @@
 from features import mfcc
 import scipy.io.wavfile as wav
 from hmmlearn.hmm import GMMHMM
+import os, sys
 
-cat = []
-dog = []
+train_cutoff = 45
 
-for i in range(50):
-    (rate,sig) = wav.read("data/cat/" + str(i) + ".wav")
-    cat.append(mfcc(sig,rate))
+base = raw_input('Enter corpus directory: ')
+
+path = 'corpora/' + base + '/'
+if not os.path.exists(path):
+    print 'Corpus not found at path: ' + path
+    print 'Exiting'
+    sys.exit()
     
-    (rate,sig) = wav.read("data/dog/" + str(i) + ".wav")
-    dog.append(mfcc(sig,rate))
-
-cutoff = 45
+words = set()
+for f in os.listdir(path):
+    word = f.split('_')[0]
+    words.add(word)
     
-catmodel = GMMHMM(n_components=5, n_mix=5)
-catmodel.fit(cat[:cutoff])
+print 'Found words:'
+for word in words:
+    print word
 
-dogmodel = GMMHMM(n_components=5, n_mix=5)
-dogmodel.fit(dog[:cutoff])
-
-testdata = cat[cutoff:] + dog[cutoff:]
-for i in range(100-2*cutoff):
-    catscore = catmodel.score(testdata[i])
-    dogscore = dogmodel.score(testdata[i])
-    print catscore, dogscore
-    if catscore > dogscore:
-        print "cat"
-    else:
-        print "dog"
-
-(rate,sig) = wav.read("help.wav")
-feat = mfcc(sig,rate)
-print catmodel.score(feat), dogmodel.score(feat)
-if (catmodel.score(feat) > dogmodel.score(feat)):
-    print "cat"
-else:
-    print "dog"
-
-for i in range(1,6):
-    (rate,sig) = wav.read("connected_data/" + str(i) + ".wav")
-    feat = mfcc(sig,rate)
-    print i, len(feat)
-    dp = [x[:] for x in [[1]*4]*(len(feat)+1)]
-    dp[0][0] = 0
-    st = [x[:] for x in [[""]*4]*(len(feat)+1)]
-
-    catscores = [x[:] for x in [[0]*len(feat)]*len(feat)]
-    dogscores = [x[:] for x in [[0]*len(feat)]*len(feat)]
-    for t in range(len(feat)):
-        if t % 10 == 0:
-            print t, "/", len(feat)
-        for tf in range(t+75, min(t+200, len(feat))):
-            catscores[t][tf] = catmodel.score(feat[t:tf])
-            dogscores[t][tf] = dogmodel.score(feat[t:tf])
-
-    for lvl in range(3):
-        for t in range(len(feat)):
-            for tf in range(t+75, (min(t+200, len(feat)))):
-                catscore = catscores[t][tf]
-                dogscore = dogscores[t][tf]
-                score = dogscore
-                nextst = "dog"
-                if catscore > dogscore:
-                    score = catscore
-                    nextst = "cat"
-                if dp[tf][lvl+1] < dp[t][lvl] + score or dp[tf][lvl+1] == 1:
-                    dp[tf][lvl+1] = dp[t][lvl] + score
-                    st[tf][lvl+1] = st[t][lvl] + nextst
-
-    print st[len(feat)-1][3]
+print 'Specify words to be removed. Enter "DONE" when finished'
+word = raw_input('')
+while word != 'DONE':
+    words.remove(word)
     
+data = {}
+models = {}
+for word in words:
+    data[word] = []
+    
+    for i in range(50):
+        (rate,sig) = wav.read(path + word + "_" + str(i) + ".wav")
+        data[word].append(mfcc(sig,rate))
+
+    models[word] = GMMHMM(n_components=5, n_mix=5)
+    models[word].fit(data[word][:train_cutoff])
+    
+
+testdata = []
+for word in words:
+    testdata += data[word][train_cutoff:]
+                     
+for test in testdata:
+    scores = {}
+    maxscore = 0
+    maxword = ''
+    for word in words:
+        scores[word] = models[word].score(test)
+        #print scores[word]
+        if (scores[word] > maxscore or maxscore == 0):
+            maxword = word
+            maxscore = scores[word]
+        
+    print maxword
+    #print maxscore
+
 import alsaaudio, wave, numpy
 import time
 
 while True:
+    if os.path.isfile('tmp.wav'):
+        os.remove('tmp.wav')
+    
+    begin = raw_input('Hit enter to begin recording.')
+    
     inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE)
     inp.setchannels(1)
     inp.setrate(44100)
     inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
     inp.setperiodsize(1024)
-
-    str = raw_input("Ready to record?")
     
     w = wave.open('tmp.wav', 'w')
     w.setnchannels(1)
     w.setsampwidth(2)
     w.setframerate(44100)
+    
+    print 'Now recording. Hit Ctrl-C to stop.'
+    
+    try:
+        while True:
+            l, data = inp.read()
+            w.writeframes(data)
+    except:
+        pass
 
-    start = time.time()
-    while time.time()-start < 2:
-        l, data = inp.read()
-        a = numpy.fromstring(data, dtype='int16')
-        w.writeframes(data)
-
+    print ''
+    
     (rate,sig) = wav.read("tmp.wav")
     feat = mfcc(sig,rate)
-    print catmodel.score(feat), dogmodel.score(feat)
-    if (catmodel.score(feat) > dogmodel.score(feat)):
-        print "cat"
-    else:
-        print "dog"
+
+    maxscore = 0
+    maxword = ''
+    for word in words:
+        scores[word] = models[word].score(feat)
+        print word + ": " + str(scores[word])
+        if (scores[word] > maxscore or maxscore == 0):
+            maxword = word
+            maxscore = scores[word]
+
+    print ''
+    print maxword
+
+    os.remove('tmp.wav')
